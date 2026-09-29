@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>ComplaintBox</title>
+    <style>
+        body { font-family: Arial, sans-serif; background: #f4f6f9; margin: 0; padding: 24px; color: #222; }
+        h1 { margin-top: 0; }
+        h2 { margin: 0 0 12px; font-size: 18px; }
+        .top { display: flex; justify-content: space-between; align-items: center; }
+        button { background: #1565c0; color: #fff; border: none; padding: 10px 18px; border-radius: 6px; cursor: pointer; font-size: 14px; }
+        button:hover { background: #0d47a1; }
+        .cards { display: flex; flex-wrap: wrap; gap: 16px; margin: 20px 0 28px; }
+        .card { background: #fff; border-radius: 10px; padding: 20px 28px; min-width: 140px; text-align: center; box-shadow: 0 2px 6px rgba(0,0,0,.12); }
+        .num { font-size: 38px; font-weight: bold; }
+        .label { color: #666; margin-top: 4px; }
+        .open .num { color: #ef6c00; }
+        .progress .num { color: #1565c0; }
+        .resolved .num { color: #2e7d32; }
+        .overdue .num { color: #d32f2f; }
+        .forms { display: flex; flex-wrap: wrap; gap: 16px; margin-bottom: 28px; }
+        .box { background: #fff; border-radius: 10px; padding: 18px; flex: 1; min-width: 280px; box-shadow: 0 2px 6px rgba(0,0,0,.12); }
+        label { display: block; font-size: 13px; color: #555; margin: 10px 0 4px; }
+        input, select, textarea { width: 100%; padding: 9px; border: 1px solid #ccc; border-radius: 6px; font-size: 14px; box-sizing: border-box; }
+        textarea { min-height: 70px; resize: vertical; }
+        .box button { margin-top: 14px; }
+        .msg { margin-top: 10px; font-size: 14px; min-height: 18px; }
+        .msg.ok { color: #2e7d32; }
+        .msg.bad { color: #d32f2f; }
+        table { width: 100%; border-collapse: collapse; background: #fff; box-shadow: 0 2px 6px rgba(0,0,0,.12); }
+        th, td { padding: 10px 12px; text-align: left; border-bottom: 1px solid #eee; }
+        th { background: #37474f; color: #fff; }
+        tr.late { background: #ffebee; }
+    </style>
+</head>
+<body>
+
+<div class="top">
+    <h1>ComplaintBox</h1>
+    <button onclick="loadAll()">Refresh</button>
+</div>
+
+<div class="cards">
+    <div class="card"><div class="num" id="total">-</div><div class="label">Total</div></div>
+    <div class="card open"><div class="num" id="open">-</div><div class="label">Open</div></div>
+    <div class="card progress"><div class="num" id="inProgress">-</div><div class="label">In Progress</div></div>
+    <div class="card resolved"><div class="num" id="resolved">-</div><div class="label">Resolved</div></div>
+    <div class="card overdue"><div class="num" id="overdue">-</div><div class="label">Overdue</div></div>
+</div>
+
+<div class="forms">
+
+    <div class="box">
+        <h2>Raise a complaint</h2>
+        <label>Resident</label>
+        <select id="selResident" onchange="fillRoom()"></select>
+        <label>Category</label>
+        <select id="selCategory"></select>
+        <label>Room number</label>
+        <input id="cRoom" placeholder="e.g. 101">
+        <label>Description</label>
+        <textarea id="cDesc" placeholder="Describe the problem"></textarea>
+        <button onclick="raiseComplaint()">Submit complaint</button>
+        <div class="msg" id="msgComplaint"></div>
+    </div>
+
+    <div class="box">
+        <h2>Add a resident</h2>
+        <label>Name</label>
+        <input id="rName" placeholder="e.g. Ravi">
+        <label>Room number</label>
+        <input id="rRoom" placeholder="e.g. 101">
+        <button onclick="addResident()">Add resident</button>
+        <div class="msg" id="msgResident"></div>
+    </div>
+
+    <div class="box">
+        <h2>Add a category</h2>
+        <label>Category name</label>
+        <input id="catName" placeholder="e.g. Electrical">
+        <button onclick="addCategory()">Add category</button>
+        <div class="msg" id="msgCategory"></div>
+    </div>
+
+</div>
+
+<h2>Open complaints (oldest first)</h2>
+<table>
+    <thead>
+    <tr>
+        <th>ID</th><th>Category</th><th>Room</th><th>Description</th>
+        <th>Status</th><th>Age</th><th>Assigned to</th>
+    </tr>
+    </thead>
+    <tbody id="rows"></tbody>
+</table>
+
+<script>
+    let residents = [];
+
+    async function api(url, method, body) {
+        const opt = { method: method || 'GET', headers: { 'Content-Type': 'application/json' } };
+        if (body) opt.body = JSON.stringify(body);
+        const res = await fetch(url, opt);
+        let data = null;
+        try { data = await res.json(); } catch (e) { }
+        if (!res.ok) {
+            let msg = 'Something went wrong';
+            if (data && data.error) msg = data.error;
+            else if (data && data.errors) msg = Object.values(data.errors).join(', ');
+            throw new Error(msg);
+        }
+        return data;
+    }
+
+    function show(id, text, ok) {
+        const el = document.getElementById(id);
+        el.textContent = text;
+        el.className = 'msg ' + (ok ? 'ok' : 'bad');
+    }
+
+    function fillSelect(id, items, labelFn) {
+        const sel = document.getElementById(id);
+        const prev = sel.value;
+        sel.innerHTML = '';
+        const first = document.createElement('option');
+        first.value = '';
+        first.textContent = '-- choose --';
+        sel.appendChild(first);
+        items.forEach(i => {
+            const o = document.createElement('option');
+            o.value = i.id;
+            o.textContent = labelFn(i);
+            sel.appendChild(o);
+        });
+        sel.value = prev;
+    }
+
+    function fillRoom() {
+        const id = document.getElementById('selResident').value;
+        const r = residents.find(x => String(x.id) === id);
+        if (r) document.getElementById('cRoom').value = r.roomNumber;
+    }
+
+    async function loadLists() {
+        const cats = await api('/api/categories');
+        residents = await api('/api/residents');
+        fillSelect('selCategory', cats, c => c.name);
+        fillSelect('selResident', residents, r => r.name + ' (Room ' + r.roomNumber + ')');
+    }
+
+    async function loadDashboard() {
+        const d = await api('/api/complaints/dashboard');
+        ['total', 'open', 'inProgress', 'resolved', 'overdue'].forEach(k => {
+            document.getElementById(k).textContent = d[k];
+        });
+
+        const list = await api('/api/complaints/open');
+        const body = document.getElementById('rows');
+        body.innerHTML = '';
+
+        if (list.length === 0) {
+            const tr = document.createElement('tr');
+            const td = document.createElement('td');
+            td.colSpan = 7;
+            td.textContent = 'No open complaints';
+            tr.appendChild(td);
+            body.appendChild(tr);
+            return;
+        }
+
+        list.forEach(c => {
+            const tr = document.createElement('tr');
+            if (c.overdue) tr.className = 'late';
+            [
+                c.id, c.category, c.roomNumber, c.description,
+                c.status + (c.overdue ? ' (OVERDUE)' : ''),
+                c.ageInDays + ' days',
+                c.assignedTo || '-'
+            ].forEach(v => {
+                const td = document.createElement('td');
+                td.textContent = v;
+                tr.appendChild(td);
+            });
+            body.appendChild(tr);
+        });
+    }
+
+    async function loadAll() {
+        try {
+            await loadLists();
+            await loadDashboard();
+        } catch (e) {
+            alert('Could not load data: ' + e.message);
+        }
+    }
+
+    async function raiseComplaint() {
+        const resId = document.getElementById('selResident').value;
+        const catId = document.getElementById('selCategory').value;
+        try {
+            const c = await api('/api/complaints', 'POST', {
+                residentId: resId ? Number(resId) : null,
+                categoryId: catId ? Number(catId) : null,
+                roomNumber: document.getElementById('cRoom').value.trim(),
+                description: document.getElementById('cDesc').value.trim()
+            });
+            show('msgComplaint', 'Complaint #' + c.id + ' raised successfully', true);
+            document.getElementById('cDesc').value = '';
+            loadDashboard();
+        } catch (e) {
+            show('msgComplaint', e.message, false);
+        }
+    }
+
+    async function addResident() {
+        try {
+            const r = await api('/api/residents', 'POST', {
+                name: document.getElementById('rName').value.trim(),
+                roomNumber: document.getElementById('rRoom').value.trim()
+            });
+            show('msgResident', 'Resident added: ' + r.name, true);
+            document.getElementById('rName').value = '';
+            document.getElementById('rRoom').value = '';
+            loadLists();
+        } catch (e) {
+            show('msgResident', e.message, false);
+        }
+    }
+
+    async function addCategory() {
+        try {
+            const c = await api('/api/categories', 'POST', {
+                name: document.getElementById('catName').value.trim()
+            });
+            show('msgCategory', 'Category added: ' + c.name, true);
+            document.getElementById('catName').value = '';
+            loadLists();
+        } catch (e) {
+            show('msgCategory', 'Could not add. The name may be empty or already exist.', false);
+        }
+    }
+
+    loadAll();
+</script>
+
+</body>
+</html>
